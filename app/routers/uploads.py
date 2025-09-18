@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, Query
 from typing import Optional
 from sqlalchemy.orm import Session
-from ..models import FormFileUpload, FormData, Application
+from ..models import UploadedDocument, FormData, Application
 from ..database import SessionLocal
 import os
 import ast
@@ -29,10 +29,10 @@ async def upload_file(
 
     try:
         # 1. Mark previous file as replaced, if exists
-        previous_record = db.query(FormFileUpload).filter(
-            FormFileUpload.form_id == formId,
-            FormFileUpload.file_type == fileType,
-            FormFileUpload.status != "Replaced"
+        previous_record = db.query(UploadedDocument).filter(
+            UploadedDocument.form_id == formId,
+            UploadedDocument.file_type == fileType,
+            UploadedDocument.status != "Replaced"
         ).first()  # optional: based on latest
 
         if previous_record:
@@ -40,7 +40,7 @@ async def upload_file(
             db.flush()
 
         # 2. Insert new file record
-        new_file_record = FormFileUpload(
+        new_file_record = UploadedDocument(
             form_id=formId,
             filename=file.filename,
             file_extension=file_ext,
@@ -106,10 +106,10 @@ async def get_upload_info(
     # Show only user uploaded sections now (provider-submitted docs)
     provider_file_types = {"DEA", "CV", "COI", "MEDICAL_TRAINING_CERTIFICATE"}
     base_query = (
-        db.query(FormFileUpload)
-        .filter(FormFileUpload.form_id == formId)
-        .filter(FormFileUpload.file_type.in_(provider_file_types))
-        .order_by(FormFileUpload.id.desc())
+        db.query(UploadedDocument)
+        .filter(UploadedDocument.form_id == formId)
+        .filter(UploadedDocument.file_type.in_(provider_file_types))
+        .order_by(UploadedDocument.id.desc())
     )
 
     rows = base_query.all()
@@ -203,9 +203,9 @@ async def get_upload_info_psv(
     }
 
     rows = (
-        db.query(FormFileUpload)
-        .filter(FormFileUpload.form_id == formId)
-        .filter(FormFileUpload.file_type.in_(list(psv_types.keys())))
+    db.query(UploadedDocument)
+    .filter(UploadedDocument.form_id == formId)
+    .filter(UploadedDocument.file_type.in_(list(psv_types.keys())))
         .all()
     )
     db.close()

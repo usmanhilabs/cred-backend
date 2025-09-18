@@ -1,10 +1,9 @@
 from fastapi import APIRouter, Query, HTTPException
-from sqlalchemy.orm import Session
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from ..models import FormFileUpload, Application, FormData
+from ..models import UploadedDocument, Application
 from ..database import SessionLocal
-import os, uuid
+import os
 
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
 DOWNLOAD_DIR = "uploads"
@@ -17,15 +16,20 @@ async def download_document(id: str = Query(...), type: str = Query(...)):
         if not application:
             raise HTTPException(status_code=404, detail="Application not found")
 
-        # Get related file uploads with OCR data
-        file_uploads = db.query(FormFileUpload).filter(FormFileUpload.status != 'Replaced', FormFileUpload.form_id==application.form_id, FormFileUpload.file_type==type).first()
-        if not file_uploads:
-            raise HTTPException(status_code=404, detail="Error while fetching file uploads")
+        file_upload = (
+            db.query(UploadedDocument)
+            .filter(
+                UploadedDocument.status != 'Replaced',
+                UploadedDocument.form_id == application.form_id,
+                UploadedDocument.file_type == type
+            )
+            .first()
+        )
+        if not file_upload:
+            raise HTTPException(status_code=404, detail="Document not found")
 
-        filename_without_ext = ".".join(file_uploads.filename.split(".")[:-1])
+        filename_without_ext = ".".join(file_upload.filename.split(".")[:-1])
         file_path = os.path.join(DOWNLOAD_DIR, f"{filename_without_ext}__{application.form_id}.pdf")
-
-        print(file_path)
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail="File not found on disk")
 

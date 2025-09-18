@@ -18,7 +18,8 @@ class ApplicationCreate(BaseModel):
     last_name: str | None = Field(..., alias="providerLastName")
     email : str
     phone : str
-    status: str
+    psv_status: str = Field("NEW", alias="psvStatus")
+    committee_status: str = Field("NOT_STARTED", alias="committeeStatus")
     progress: int
     assignee: str
     source: str
@@ -40,7 +41,7 @@ class ApplicationResponse(ApplicationCreate):
     last_updt_dt: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
         populate_by_name = True
 
 class EmailCreate(BaseModel):
