@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  backend:
+    build: .
+    image: fast-cred-backend:latest
+    container_name: fast-cred-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Map the single external var OPEN_API_KEY to the app's expected OPENAI_API_KEY
+      OPENAI_API_KEY: "sk-proj-P9EezK_Wg85j3h3o_bN45N85iFF30T9xl9-KZgzYA0l4AUGhkLGZ3FsoWZumQQhrcA"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./credential.db:/app/credential.db
+      - ./ref_uploads:/app/ref_uploads
+    restart: unless-stopped
+
+  frontend:
+    # Replace this with your actual frontend image
+    image: fast-cred-frontend:latest
+    container_name: fast-cred-frontend
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: "http://54.211.52.113:8000"
+    ports:
+      - "9002:9002"
+
+    restart: unless-stopped
+
+networks:
+  default:
+    name: fast-cred-net

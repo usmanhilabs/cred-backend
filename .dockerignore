@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite
+.env
+.venv/
+venv/
+.git/
+.gitignore
+.idea/
+.vscode/
+.dist/
+.build/
+.cache/
+.pytest_cache/
+
+# Node, if any frontend exists
+node_modules/
+build/
+dist/
+
+# OS files
+.DS_Store
+Thumbs.db

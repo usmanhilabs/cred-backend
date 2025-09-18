@@ -1,0 +1,243 @@
+from fastapi import APIRouter, UploadFile, File, Form, Query
+from typing import Optional
+from sqlalchemy.orm import Session
+from ..models import FormFileUpload, FormData, Application
+from ..database import SessionLocal
+import os
+import ast
+
+router = APIRouter(prefix="/api/forms", tags=["Uploads"])
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+@router.post("/upload-file")
+async def upload_file(
+    formId: str = Form(...),
+    fileType: str = Form(...),
+    file: UploadFile = File(...)
+):  
+    filename_without_ext = ".".join(file.filename.split(".")[:-1])
+    file_ext = file.filename.split(".")[-1]
+    new_filename = f"{filename_without_ext}__{formId}.{file_ext}"
+    file_path = os.path.join(UPLOAD_DIR, new_filename)
+
+    with open(file_path, "wb") as f:
+        f.write(await file.read())
+
+    db: Session = SessionLocal()
+
+    try:
+        # 1. Mark previous file as replaced, if exists
+        previous_record = db.query(FormFileUpload).filter(
+            FormFileUpload.form_id == formId,
+            FormFileUpload.file_type == fileType,
+            FormFileUpload.status != "Replaced"
+        ).first()  # optional: based on latest
+
+        if previous_record:
+            previous_record.status = "Replaced"
+            db.flush()
+
+        # 2. Insert new file record
+        new_file_record = FormFileUpload(
+            form_id=formId,
+            filename=file.filename,
+            file_extension=file_ext,
+            file_type=fileType,
+            status="New"
+        )
+        db.add(new_file_record)
+        db.flush()
+
+        # 3. Update reference in FormData
+        form = db.query(FormData).filter(FormData.form_id == formId).first()
+        if form:
+            field_name = f"{fileType}_upload_id"
+            setattr(form, field_name, new_file_record.id)
+
+        db.commit()
+        db.refresh(new_file_record)
+
+        return {
+            "message": "File uploaded successfully",
+            "fileId": new_file_record.id,
+            "filename": file.filename,
+            "fileType": fileType,
+        }
+
+    finally:
+        db.close()
+
+
+def get_progress(type):
+    if type == "npi":
+        return 100
+    elif type == "dl":
+        return 90
+    elif type == "degree":
+        return 75
+    elif type in ("cv", "cv/resume"):
+        return 60
+    elif type in ("MEDICAL_TRAINING_CERTIFICATE",):
+        return 90
+    elif type in ("board_certification",):
+        return 85
+    elif type in ("license_board",):
+        return 80
+    elif type in ("DEA", "COI", "CV"):
+        return 60
+    else:
+        return 45
+    
+
+@router.get("/upload-info")
+async def get_upload_info(
+    uploadIds: Optional[str] = Query(None),
+    formId: Optional[str] = Query(None),
+    appId: Optional[str] = Query(None),
+):
+    db: Session = SessionLocal()
+    if appId:
+        application = db.query(Application).filter(Application.id == appId).first()
+        if application:
+            formId = application.form_id
+
+    # Show only user uploaded sections now (provider-submitted docs)
+    provider_file_types = {"DEA", "CV", "COI", "MEDICAL_TRAINING_CERTIFICATE"}
+    base_query = (
+        db.query(FormFileUpload)
+        .filter(FormFileUpload.form_id == formId)
+        .filter(FormFileUpload.file_type.in_(provider_file_types))
+        .order_by(FormFileUpload.id.desc())
+    )
+
+    rows = base_query.all()
+    db.close()
+
+    # Build response with optional placeholders for blank sections
+    response_files = {}
+    for file in rows:
+        if file.file_type in response_files:
+            continue
+        response_files[file.file_type] = {
+            "filename": file.filename,
+            "fileType": file.file_type,
+            "fileExtension": file.file_extension,
+            "fileId": file.id,
+            "status": file.status,
+            "progress": get_progress(file.file_type),
+            "pdfMatch": ast.literal_eval(file.pdf_match) if file.pdf_match else {},
+            "ocrData": ast.literal_eval(file.ocr_output) if file.ocr_output else {},
+        }
+
+
+    # Add verification messages for Training and CV if present
+    for key in ("training", "cv"):
+        if key in response_files:
+            response_files[key]["verification"] = "In Verification: Automated Outreach triggered"
+
+    return {
+        "formId": formId,
+        "files": response_files,
+    }
+
+
+@router.get("/upload-info-psv")
+async def get_upload_info_psv(
+    uploadIds: Optional[str] = Query(None),
+    formId: Optional[str] = Query(None),
+    appId: Optional[str] = Query(None),
+):
+    db: Session = SessionLocal()
+
+    if appId:
+        application = db.query(Application).filter(Application.id == appId).first()
+        if application:
+            formId = application.form_id
+
+    psv_types = {
+        "board_certification": {
+            "verification": "Verification with Board Certificate",
+            "ocr_keys": [
+                "abmsuid",
+                "abms_name",
+                "abms_dob",
+                "abms_education",
+                "abms_address",
+                "abms_certification_board",
+                "abms_certification_type",
+                "abms_status",
+                "abms_duration",
+                "abms_occurrence",
+                "abms_start_date",
+                "abms_end_date",
+                "abms_reverification_date",
+                "abms_participating_in_moc",
+            ],
+        },
+        "license_board": {
+            "verification": "License Number Match",
+            "ocr_keys": [
+                "LicenseBoard_ExtractedLicense",
+                "LicenseBoard_Extracted_Name",
+                "LicenseBoard_Extracted_License_Type",
+                "LicenseBoard_Extracted_Primary_Status",
+                "LicenseBoard_Extracted_Specialty",
+                "LicenseBoard_Extracted_Qualification",
+                "LicenseBoard_Extracted_School_Name",
+                "LicenseBoard_Extracted_Graduation_Year",
+                "LicenseBoard_Extracted_Previous_Names",
+                "LicenseBoard_Extracted_Address",
+                "LicenseBoard_Extracted_Issuance_Date",
+                "LicenseBoard_Extracted_Expiration_Date",
+                "LicenseBoard_Extracted_Current_Date_Time",
+                "LicenseBoard_Extracted_Professional_Url",
+                "LicenseBoard_Extracted_Disciplinary_Actions",
+                "LicenseBoard_Extracted_Public_Record_Actions",
+            ],
+        },
+        "sanctions": {"verification": None, "ocr_keys": []},
+        "hospital_privileges": {"verification": None, "ocr_keys": []},
+        "npi": {"verification": None, "ocr_keys": []},
+    }
+
+    rows = (
+        db.query(FormFileUpload)
+        .filter(FormFileUpload.form_id == formId)
+        .filter(FormFileUpload.file_type.in_(list(psv_types.keys())))
+        .all()
+    )
+    db.close()
+
+    files = {}
+    for r in rows:
+        ocr_data = ast.literal_eval(r.ocr_output) if r.ocr_output else {}
+        files[r.file_type] = {
+            "filename": r.filename,
+            "fileType": r.file_type,
+            "fileExtension": r.file_extension,
+            "fileId": r.id,
+            "status": r.status,
+            "progress": get_progress(r.file_type),
+            "pdfMatch": ast.literal_eval(r.pdf_match) if r.pdf_match else {},
+            "ocrData": {k: ocr_data.get(k) for k in psv_types[r.file_type]["ocr_keys"]} if psv_types[r.file_type]["ocr_keys"] else ocr_data,
+            "verification": psv_types[r.file_type]["verification"],
+        }
+
+    # Ensure placeholders for any missing PSV sections
+    for ft, meta in psv_types.items():
+        if ft not in files:
+            files[ft] = {
+                "filename": None,
+                "fileType": ft,
+                "fileExtension": None,
+                "fileId": None,
+                "status": None,
+                "progress": get_progress(ft),
+                "pdfMatch": {},
+                "ocrData": {},
+                "verification": meta["verification"],
+            }
+
+    return {"formId": formId, "files": files}
