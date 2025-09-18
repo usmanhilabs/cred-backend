@@ -5,7 +5,7 @@ import json
 
 from sqlalchemy.orm import Session
 
-from app.models import Application, FormData, FormFileUpload, EmailRecord
+from app.models import Application, FormData, UploadedDocument, EmailRecord
 
 try:
     from openai import OpenAI  # type: ignore
@@ -60,8 +60,8 @@ class ReportService:
             raise ValueError("Form data not found")
 
         uploads = (
-            self.db.query(FormFileUpload)
-            .filter(FormFileUpload.form_id == application.form_id)
+            self.db.query(UploadedDocument)
+            .filter(UploadedDocument.form_id == application.form_id)
             .all()
         )
 
@@ -101,7 +101,7 @@ class ReportService:
 
         final_result: Dict[str, Any] = {
             "result": {
-                "compliance_status": application.status or "Unknown",
+                "compliance_status": application.psv_status or "Unknown",
                 "score": self._infer_score(application, uploads),
                 "processing_time": None,
                 "hard_regulations": {},
@@ -474,7 +474,7 @@ class ReportService:
             return {}
 
     @staticmethod
-    def _infer_score(application: Application, uploads: List[FormFileUpload]) -> int:
+    def _infer_score(application: Application, uploads: List[UploadedDocument]) -> int:
         # Heuristic: approved/verified docs boost score
         total = len(uploads) or 1
         status_u = lambda s: (s or "").upper()
@@ -510,7 +510,7 @@ class ReportService:
         self,
         application: Application,
         form: FormData,
-        uploads: List[FormFileUpload],
+    uploads: List[UploadedDocument],
         emails: List[EmailRecord],
     ) -> List[Dict[str, Any]]:
         steps: List[Dict[str, Any]] = []
@@ -564,7 +564,7 @@ class ReportService:
         self,
         application: Application,
         form: FormData,
-        uploads: List[FormFileUpload],
+    uploads: List[UploadedDocument],
         emails: List[EmailRecord],
     ) -> List[Dict[str, Any]]:
         decisions: List[Dict[str, Any]] = []

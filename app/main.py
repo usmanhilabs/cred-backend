@@ -2,13 +2,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, engine
 from apscheduler.schedulers.background import BackgroundScheduler
-from .routers import forms, uploads, applications, documents, emails
+from .routers import forms, uploads, applications, documents, emails, executive_summary, psv_info
 from sqlalchemy.orm import Session
 from .utils import get_db, reference_keys_map
 import os, json
 from contextlib import asynccontextmanager
 from .pipeline import run_pipeline
-from .models import FormFileUpload, FormData, Application
+from .models import UploadedDocument, FormData, Application
 
 Base.metadata.create_all(bind=engine)
 
@@ -19,7 +19,7 @@ Base.metadata.create_all(bind=engine)
 #     print("job started ------------------")
 #     db: Session = next(get_db())
 #     try:
-#         row = db.query(FormFileUpload).filter(FormFileUpload.status == "New").first()
+#         row = db.query(UploadedDocument).filter(UploadedDocument.status == "New").first()
 
 #         if not row:
 #             print("No new rows to process.")
@@ -27,7 +27,7 @@ Base.metadata.create_all(bind=engine)
 
 #         form, application = (
 #             db.query(FormData).filter(FormData.form_id == row.form_id).first(),
-#             db.query(Application).filter(Application.form_id == row.form_id, Application.status == "New").first(),
+#             db.query(Application).filter(Application.form_id == row.form_id, Application.psv_status == "NEW").first(),
 #         )
 
 #         if form and application:
@@ -129,3 +129,5 @@ app.include_router(uploads.router)
 app.include_router(applications.router)
 app.include_router(documents.router)
 app.include_router(emails.router)
+app.include_router(executive_summary.router)
+app.include_router(psv_info.router)
