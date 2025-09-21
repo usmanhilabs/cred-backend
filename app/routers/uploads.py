@@ -1,10 +1,11 @@
 from fastapi import APIRouter, UploadFile, File, Form, Query
 from typing import Optional
 from sqlalchemy.orm import Session
-from ..models import UploadedDocument, FormData, Application
+from ..models import UploadedDocument, FormData, Application, ApplicationEvent
 from ..database import SessionLocal
 import os
 import ast
+import json
 
 router = APIRouter(prefix="/api/forms", tags=["Uploads"])
 UPLOAD_DIR = "uploads"
@@ -73,6 +74,8 @@ async def upload_file(
 def get_progress(type):
     if type == "npi":
         return 100
+    elif type == "malpractice_insurance":
+        return 70
     elif type == "dl":
         return 90
     elif type == "degree":
@@ -91,6 +94,35 @@ def get_progress(type):
         return 45
     
 
+def _parse_json_field(val: Optional[str]):
+    if not val:
+        return {}
+    # try JSON first, then Python literal
+    try:
+        return json.loads(val)
+    except Exception:
+        try:
+            return ast.literal_eval(val)
+        except Exception:
+            return {}
+
+
+def _normalize_provider_type(ft: str) -> str:
+    if not ft:
+        return ""
+    v = ft.strip()
+    lu = v.lower()
+    if lu in ("degree", "medical_training_certificate", "medical_training_cert", "mtc", "med_training"):
+        return "MEDICAL_TRAINING_CERTIFICATE"
+    if lu in ("cv", "cv/resume", "resume"):
+        return "CV"
+    if lu == "dea":
+        return "DEA"
+    if lu == "coi":
+        return "COI"
+    # default: uppercase token
+    return v.upper()
+
 @router.get("/upload-info")
 async def get_upload_info(
     uploadIds: Optional[str] = Query(None),
@@ -103,43 +135,87 @@ async def get_upload_info(
         if application:
             formId = application.form_id
 
-    # Show only user uploaded sections now (provider-submitted docs)
-    provider_file_types = {"DEA", "CV", "COI", "MEDICAL_TRAINING_CERTIFICATE"}
-    base_query = (
+    if not formId:
+        db.close()
+        return {"formId": None, "files": {}, "comments": []}
+
+    # Show provider-submitted docs; accept multiple DB variants and normalize to FE keys
+    provider_file_types_db = {
+        "DEA", "CV", "COI", "MEDICAL_TRAINING_CERTIFICATE",
+        "dea", "cv", "coi", "degree", "cv/resume", "medical_training_certificate", "medical_training_cert"
+    }
+    query = (
         db.query(UploadedDocument)
         .filter(UploadedDocument.form_id == formId)
-        .filter(UploadedDocument.file_type.in_(provider_file_types))
         .order_by(UploadedDocument.id.desc())
     )
+    all_rows = query.all()
 
-    rows = base_query.all()
+    # Filter to provider types if any match, else fallback to all for this form
+    provider_rows = [r for r in all_rows if (r.file_type or "") in provider_file_types_db]
+    rows = provider_rows if provider_rows else all_rows
+    # Gather recent comments/events for the application if appId given
+    comments = []
+    if appId:
+        events = (
+            db.query(ApplicationEvent)
+            .filter(ApplicationEvent.application_id == appId)
+            .order_by(ApplicationEvent.created_at.desc())
+            .limit(10)
+            .all()
+        )
+        for ev in events:
+            comments.append({
+                "id": ev.id,
+                "type": ev.event_type,
+                "message": ev.message,
+                "createdAt": ev.created_at.isoformat() if ev.created_at else None,
+            })
     db.close()
 
     # Build response with optional placeholders for blank sections
     response_files = {}
     for file in rows:
-        if file.file_type in response_files:
+        key = _normalize_provider_type(file.file_type)
+        if key in response_files:
             continue
-        response_files[file.file_type] = {
+        response_files[key] = {
             "filename": file.filename,
-            "fileType": file.file_type,
+            "fileType": key,
             "fileExtension": file.file_extension,
             "fileId": file.id,
             "status": file.status,
-            "progress": get_progress(file.file_type),
-            "pdfMatch": ast.literal_eval(file.pdf_match) if file.pdf_match else {},
-            "ocrData": ast.literal_eval(file.ocr_output) if file.ocr_output else {},
+            "progress": get_progress(key),
+            "pdfMatch": _parse_json_field(file.pdf_match),
+            "ocrData": _parse_json_field(file.ocr_output),
+            "jsonMatch": _parse_json_field(file.json_match),
+            "verification": _parse_json_field(file.verification_data),
         }
 
 
-    # Add verification messages for Training and CV if present
-    for key in ("training", "cv"):
-        if key in response_files:
-            response_files[key]["verification"] = "In Verification: Automated Outreach triggered"
+    # Ensure placeholders for expected provider tiles
+    expected_provider_types = [
+        "MEDICAL_TRAINING_CERTIFICATE", "DEA", "COI", "CV"
+    ]
+    for t in expected_provider_types:
+        if t not in response_files:
+            response_files[t] = {
+                "filename": None,
+                "fileType": t,
+                "fileExtension": None,
+                "fileId": None,
+                "status": None,
+                "progress": get_progress(t),
+                "pdfMatch": {},
+                "ocrData": {},
+                "jsonMatch": {},
+                "verification": {},
+            }
 
     return {
         "formId": formId,
         "files": response_files,
+        "comments": comments,
     }
 
 
@@ -155,6 +231,10 @@ async def get_upload_info_psv(
         application = db.query(Application).filter(Application.id == appId).first()
         if application:
             formId = application.form_id
+
+    if not formId:
+        db.close()
+        return {"formId": None, "files": {}}
 
     psv_types = {
         "board_certification": {
@@ -174,6 +254,18 @@ async def get_upload_info_psv(
                 "abms_end_date",
                 "abms_reverification_date",
                 "abms_participating_in_moc",
+            ],
+        },
+        "DEA": {
+            "verification": "DEA Verification",
+            "ocr_keys": [
+                "Registrant Name",
+                "DEA Registration Number",
+                "Business Address",
+                "Controlled Substance Schedules",
+                "Business Activity",
+                "Issue Date",
+                "Expiration Date",
             ],
         },
         "license_board": {
@@ -199,20 +291,46 @@ async def get_upload_info_psv(
         },
         "sanctions": {"verification": None, "ocr_keys": []},
         "hospital_privileges": {"verification": None, "ocr_keys": []},
-        "npi": {"verification": None, "ocr_keys": []},
+        "malpractice_insurance": {
+            "verification": "Insurance Policy Verification",
+            "ocr_keys": [
+                "Insured Name",
+                "Insurer Name",
+                "Policy Number",
+                "Policy Effective Date",
+                "Policy Expiration Date",
+                "Liability Limit (Per Claim)",
+                "Liability Limit (Aggregate)",
+            ],
+        },
+        "npi": {"verification": "NPPES Verification", "ocr_keys": []},
     }
 
     rows = (
-    db.query(UploadedDocument)
-    .filter(UploadedDocument.form_id == formId)
-    .filter(UploadedDocument.file_type.in_(list(psv_types.keys())))
+        db.query(UploadedDocument)
+        .filter(UploadedDocument.form_id == formId)
+        .filter(UploadedDocument.file_type.in_(list(psv_types.keys())))
         .all()
     )
-    db.close()
 
     files = {}
     for r in rows:
-        ocr_data = ast.literal_eval(r.ocr_output) if r.ocr_output else {}
+        ocr_data = _parse_json_field(r.ocr_output)
+        json_match = _parse_json_field(r.json_match)
+        verification_details = _parse_json_field(r.verification_data)
+        legacy_verif = psv_types[r.file_type]["verification"]
+        # For sanctions, surface key details in the ocrData section so the UI shows values
+        if r.file_type == "sanctions" and verification_details:
+            prov = verification_details.get("provider") or {}
+            sanc = verification_details.get("sanction") or {}
+            ocr_data = {
+                "Sanction Status": sanc.get("status") or "N/A",
+                "Sanction Details": sanc.get("details") or "N/A",
+                "Comment 1": sanc.get("comment_1") or "",
+                "Comment 2": sanc.get("comment_2") or "",
+                "NPI": verification_details.get("npi") or "",
+                "Provider Name": prov.get("name") or "",
+            }
         files[r.file_type] = {
             "filename": r.filename,
             "fileType": r.file_type,
@@ -220,9 +338,12 @@ async def get_upload_info_psv(
             "fileId": r.id,
             "status": r.status,
             "progress": get_progress(r.file_type),
-            "pdfMatch": ast.literal_eval(r.pdf_match) if r.pdf_match else {},
+            "pdfMatch": _parse_json_field(r.pdf_match),
             "ocrData": {k: ocr_data.get(k) for k in psv_types[r.file_type]["ocr_keys"]} if psv_types[r.file_type]["ocr_keys"] else ocr_data,
-            "verification": psv_types[r.file_type]["verification"],
+            "jsonMatch": json_match,
+            # Keep legacy string for UI label, and provide details in separate field
+            "verification": legacy_verif,
+            "verificationDetails": verification_details,
         }
 
     # Ensure placeholders for any missing PSV sections
