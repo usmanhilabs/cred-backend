@@ -7,7 +7,7 @@ from typing import List
 from datetime import datetime
 import json
 from app.models import FormData, UploadedDocument, EmailRecord, ApplicationEvent
-from app.utils import get_db
+from app.utils import get_db, compute_progress
 import uuid
 from app.services.report_service import ReportService
 
@@ -53,6 +53,8 @@ def update_application_model(db_obj: Application, data: dict):
     db_obj.specialty = data.get("specialty")
     db_obj.address = data.get("address")
     db_obj.npi = data.get("npi")
+    # recompute progress whenever statuses/fields change
+    db_obj.progress = compute_progress(db_obj.psv_status, db_obj.committee_status)
 
 @router.post("/", response_model=ApplicationResponse)
 def create_application(app_data: ApplicationCreate, db: Session = Depends(get_db)):
@@ -62,6 +64,7 @@ def create_application(app_data: ApplicationCreate, db: Session = Depends(get_db
     # print("existing_application with data:", vars(existing_application))
     if existing_application:
         update_application_model(existing_application, app_data.dict(by_alias=True, exclude={"id"}))
+        # progress recomputed in update_application_model
         db.commit()
         db.refresh(existing_application)
         return model_to_response(existing_application)
@@ -73,6 +76,7 @@ def create_application(app_data: ApplicationCreate, db: Session = Depends(get_db
     )
     application.create_dt = now
     application.last_updt_dt = now
+    application.progress = compute_progress(application.psv_status, application.committee_status)
     db.add(application)
     db.commit()
     db.refresh(application)
@@ -80,7 +84,16 @@ def create_application(app_data: ApplicationCreate, db: Session = Depends(get_db
 
 @router.get("/", response_model=List[ApplicationResponse])
 def get_all_applications(db: Session = Depends(get_db)):
-    applications = db.query(Application).order_by(desc(Application.create_dt)).all()
+    # Sanctioned first, then most recent
+    applications = (
+        db.query(Application)
+        .order_by(
+            # Put SANCTIONED first via boolean sort key (False < True, so invert)
+            (Application.psv_status != "SANCTIONED"),
+            desc(Application.create_dt),
+        )
+        .all()
+    )
     if not applications:
         raise HTTPException(status_code=404, detail="No applications found")
     return [model_to_response(app) for app in applications]
@@ -358,7 +371,10 @@ def list_committee_review_applications(db: Session = Depends(get_db)):
     rows = (
         db.query(Application)
         .filter(Application.committee_status != "NOT_STARTED")
-        .order_by(desc(Application.last_updt_dt))
+        .order_by(
+            (Application.psv_status != "SANCTIONED"),
+            desc(Application.last_updt_dt),
+        )
         .all()
     )
     return [model_to_response(a) for a in rows]
@@ -369,6 +385,7 @@ def send_to_committee(application_id: str, db: Session = Depends(get_db)):
     if not app_row:
         raise HTTPException(status_code=404, detail="Application not found")
     app_row.committee_status = "IN_REVIEW"
+    app_row.progress = compute_progress(app_row.psv_status, app_row.committee_status)
     app_row.last_updt_dt = datetime.utcnow()
     db.commit()
     db.refresh(app_row)
