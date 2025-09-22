@@ -98,115 +98,7 @@ def get_all_applications(db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No applications found")
     return [model_to_response(app) for app in applications]
 
-@router.get("/{app_id}")
-def get_application_by_id(app_id: str, db: Session = Depends(get_db)):
-    application = db.query(Application).filter_by(id=app_id).first()
-    if not application:
-        raise HTTPException(status_code=404, detail="Application not found")
-
-    form_data = db.query(FormData).filter_by(form_id=application.form_id).first()
-    if not form_data:
-        form_snapshot = {}
-    else:
-        form_snapshot = {
-            "providerId": form_data.provider_id,
-            "providerName": form_data.provider_name,
-            "providerLastName": form_data.provider_last_name,
-            "specialty": form_data.specialty,
-            "address": form_data.address,
-            "npi": form_data.npi,
-            "email": form_data.email,
-            "phone": form_data.phone,
-        }
-
-    docs = []
-    uploads = db.query(UploadedDocument).filter(UploadedDocument.form_id == application.form_id, UploadedDocument.status != "Replaced").all()
-    for u in uploads:
-        docs.append({
-            "id": u.id,
-            "type": u.file_type,
-            "filename": u.filename,
-            "status": u.status,
-            "ocrData": u.ocr_output and json.loads(u.ocr_output) if u.ocr_output else {},
-            "jsonMatch": u.json_match and json.loads(u.json_match) if u.json_match else {},
-        })
-
-    # AI issues reuse logic from separate endpoint (light duplication to avoid extra call)
-    issues = []
-    first_doc = uploads[0] if uploads else None
-    if first_doc and first_doc.json_match:
-        try:
-            json_match_data = json.loads(first_doc.json_match)
-            for field, data in json_match_data.items():
-                if not data.get("match"):
-                    issues.append({
-                        "field": field.upper(),
-                        "issue": f"{field.upper()} field mismatch.",
-                        "confidence": float(data.get("extracted_confident_score", 0)),
-                        "value": data.get("extracted"),
-                        "reasoning": f"Extracted value '{data.get('extracted')}' does not match provided value '{data.get('provided')}'."
-                    })
-        except Exception:
-            pass
-
-    # Add two demo issues if list empty (placeholder until ML pipeline integrated)
-    if not issues:
-        issues.append({
-            "field": "DEA CERTIFICATE",
-            "issue": "Missing Schedule II authorization",
-            "confidence": 0.88,
-            "value": "DEA Certificate ID: 1234567890, Authorized Schedules: III, IV, V",
-            "reasoning": "Schedule II not explicitly listed for this specialty."})
-        issues.append({
-            "field": "CV/RESUME",
-            "issue": "Gap in employment history (3 months)",
-            "confidence": 0.65,
-            "value": "Missing: Jan 2020 - Mar 2020",
-            "reasoning": "Detected temporal gap requiring clarification."})
-
-    # Timeline events
-    events = []
-    event_rows = db.query(ApplicationEvent).filter(ApplicationEvent.application_id == application.id).order_by(ApplicationEvent.created_at.asc()).all()
-    for ev in event_rows:
-        events.append({
-            "id": ev.id,
-            "type": ev.event_type,
-            "message": ev.message,
-            "createdAt": ev.created_at.isoformat() if ev.created_at else None
-        })
-
-    # Email summary placeholders
-    emails = db.query(EmailRecord).filter_by(application_id=application.id).all()
-    emails_sent = len([e for e in emails if e.status == "SENT"])
-
-    return {
-        "id": application.id,
-        "npi": form_snapshot.get("npi") if form_snapshot else application.npi,
-        "address": form_snapshot.get("address") if form_snapshot else application.address,
-        "specialty": form_snapshot.get("specialty") if form_snapshot else application.specialty,
-        "market": application.market,
-        "application": {
-            "id": application.id,
-            "psvStatus": application.psv_status,
-            "committeeStatus": application.committee_status,
-            "progress": application.progress,
-            "assignee": application.assignee,
-            "source": application.source,
-            "market": application.market,
-            "createdAt": application.create_dt.isoformat() if application.create_dt else None,
-            "lastUpdatedAt": application.last_updt_dt.isoformat() if application.last_updt_dt else None,
-        },
-        "provider": form_snapshot,
-        "documents": docs,
-        "aiIssues": issues,
-        "summary": {
-            "documentsSubmitted": len(docs),
-            "documentsVerified": sum(1 for d in docs if d["status"] == "APPROVED"),
-            "emailsSent": emails_sent,
-            "nextAction": "Proceed to Credentialing" if application.psv_status == "COMPLETED" else "Verify outstanding documents",
-        },
-        "timeline": events,
-    }
+ 
 
 
 @router.get("/aiissues/{app_id}")
@@ -370,11 +262,12 @@ def generate_short_summary_report(app_id: str, db: Session = Depends(get_db)):
 def list_committee_review_applications(db: Session = Depends(get_db)):
     rows = (
         db.query(Application)
-        .filter(Application.committee_status != "NOT_STARTED")
-        .order_by(
-            (Application.psv_status != "SANCTIONED"),
-            desc(Application.last_updt_dt),
+        .filter(
+            Application.committee_status != "NOT_STARTED",
+            Application.committee_status != "SANCTIONED",
+            Application.psv_status != "SANCTIONED",
         )
+        .order_by(desc(Application.last_updt_dt))
         .all()
     )
     return [model_to_response(a) for a in rows]
@@ -385,8 +278,121 @@ def send_to_committee(application_id: str, db: Session = Depends(get_db)):
     if not app_row:
         raise HTTPException(status_code=404, detail="Application not found")
     app_row.committee_status = "IN_REVIEW"
+    app_row.psv_status = "COMPLETED"
     app_row.progress = compute_progress(app_row.psv_status, app_row.committee_status)
     app_row.last_updt_dt = datetime.utcnow()
     db.commit()
     db.refresh(app_row)
     return model_to_response(app_row)
+
+
+# Place dynamic id route AFTER static routes to avoid shadowing
+@router.get("/{app_id}")
+def get_application_by_id(app_id: str, db: Session = Depends(get_db)):
+    application = db.query(Application).filter_by(id=app_id).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    form_data = db.query(FormData).filter_by(form_id=application.form_id).first()
+    if not form_data:
+        form_snapshot = {}
+    else:
+        form_snapshot = {
+            "providerId": form_data.provider_id,
+            "providerName": form_data.provider_name,
+            "providerLastName": form_data.provider_last_name,
+            "specialty": form_data.specialty,
+            "address": form_data.address,
+            "npi": form_data.npi,
+            "email": form_data.email,
+            "phone": form_data.phone,
+        }
+
+    docs = []
+    uploads = db.query(UploadedDocument).filter(UploadedDocument.form_id == application.form_id, UploadedDocument.status != "Replaced").all()
+    for u in uploads:
+        docs.append({
+            "id": u.id,
+            "type": u.file_type,
+            "filename": u.filename,
+            "status": u.status,
+            "ocrData": u.ocr_output and json.loads(u.ocr_output) if u.ocr_output else {},
+            "jsonMatch": u.json_match and json.loads(u.json_match) if u.json_match else {},
+        })
+
+    # AI issues reuse logic from separate endpoint (light duplication to avoid extra call)
+    issues = []
+    first_doc = uploads[0] if uploads else None
+    if first_doc and first_doc.json_match:
+        try:
+            json_match_data = json.loads(first_doc.json_match)
+            for field, data in json_match_data.items():
+                if not data.get("match"):
+                    issues.append({
+                        "field": field.upper(),
+                        "issue": f"{field.upper()} field mismatch.",
+                        "confidence": float(data.get("extracted_confident_score", 0)),
+                        "value": data.get("extracted"),
+                        "reasoning": f"Extracted value '{data.get('extracted')}' does not match provided value '{data.get('provided')}'."
+                    })
+        except Exception:
+            pass
+
+    # Add two demo issues if list empty (placeholder until ML pipeline integrated)
+    if not issues:
+        issues.append({
+            "field": "DEA CERTIFICATE",
+            "issue": "Missing Schedule II authorization",
+            "confidence": 0.88,
+            "value": "DEA Certificate ID: 1234567890, Authorized Schedules: III, IV, V",
+            "reasoning": "Schedule II not explicitly listed for this specialty."})
+        issues.append({
+            "field": "CV/RESUME",
+            "issue": "Gap in employment history (3 months)",
+            "confidence": 0.65,
+            "value": "Missing: Jan 2020 - Mar 2020",
+            "reasoning": "Detected temporal gap requiring clarification."})
+
+    # Timeline events
+    events = []
+    event_rows = db.query(ApplicationEvent).filter(ApplicationEvent.application_id == application.id).order_by(ApplicationEvent.created_at.asc()).all()
+    for ev in event_rows:
+        events.append({
+            "id": ev.id,
+            "type": ev.event_type,
+            "message": ev.message,
+            "createdAt": ev.created_at.isoformat() if ev.created_at else None
+        })
+
+    # Email summary placeholders
+    emails = db.query(EmailRecord).filter_by(application_id=application.id).all()
+    emails_sent = len([e for e in emails if e.status == "SENT"])
+
+    return {
+        "id": application.id,
+        "npi": form_snapshot.get("npi") if form_snapshot else application.npi,
+        "address": form_snapshot.get("address") if form_snapshot else application.address,
+        "specialty": form_snapshot.get("specialty") if form_snapshot else application.specialty,
+        "market": application.market,
+        "application": {
+            "id": application.id,
+            "psvStatus": application.psv_status,
+            "committeeStatus": application.committee_status,
+            "progress": application.progress,
+            "assignee": application.assignee,
+            "source": application.source,
+            "market": application.market,
+            "createdAt": application.create_dt.isoformat() if application.create_dt else None,
+            "lastUpdatedAt": application.last_updt_dt.isoformat() if application.last_updt_dt else None,
+        },
+        "provider": form_snapshot,
+        "documents": docs,
+        "aiIssues": issues,
+        "summary": {
+            "documentsSubmitted": len(docs),
+            "documentsVerified": sum(1 for d in docs if d["status"] == "APPROVED"),
+            "emailsSent": emails_sent,
+            "nextAction": "Proceed to Credentialing" if application.psv_status == "COMPLETED" else "Verify outstanding documents",
+        },
+        "timeline": events,
+    }
