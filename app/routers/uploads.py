@@ -292,18 +292,6 @@ async def get_upload_info_psv(
             ],
         },
         "sanctions": {"verification": None, "ocr_keys": []},
-        "malpractice_insurance": {
-            "verification": "Insurance Policy Verification",
-            "ocr_keys": [
-                "Insured Name",
-                "Insurer Name",
-                "Policy Number",
-                "Policy Effective Date",
-                "Policy Expiration Date",
-                "Liability Limit (Per Claim)",
-                "Liability Limit (Aggregate)",
-            ],
-        },
         "npi": {"verification": "NPPES Verification", "ocr_keys": []},
     }
 
