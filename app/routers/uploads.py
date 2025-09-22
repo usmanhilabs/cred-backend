@@ -120,6 +120,8 @@ def _normalize_provider_type(ft: str) -> str:
         return "DEA"
     if lu == "coi":
         return "COI"
+    if lu == "malpractice_insurance":
+        return "malpractice_insurance"
     # default: uppercase token
     return v.upper()
 
@@ -141,8 +143,8 @@ async def get_upload_info(
 
     # Show provider-submitted docs; accept multiple DB variants and normalize to FE keys
     provider_file_types_db = {
-        "DEA", "CV", "COI", "MEDICAL_TRAINING_CERTIFICATE",
-        "dea", "cv", "coi", "degree", "cv/resume", "medical_training_certificate", "medical_training_cert"
+        "DEA", "CV", "MEDICAL_TRAINING_CERTIFICATE", "malpractice_insurance",
+        "dea", "cv", "degree", "cv/resume", "medical_training_certificate", "medical_training_cert", "malpractice_insurance"
     }
     query = (
         db.query(UploadedDocument)
@@ -177,9 +179,11 @@ async def get_upload_info(
     response_files = {}
     for file in rows:
         key = _normalize_provider_type(file.file_type)
+        if key == "COI":
+            continue
         if key in response_files:
             continue
-        response_files[key] = {
+        base = {
             "filename": file.filename,
             "fileType": key,
             "fileExtension": file.file_extension,
@@ -189,17 +193,22 @@ async def get_upload_info(
             "pdfMatch": _parse_json_field(file.pdf_match),
             "ocrData": _parse_json_field(file.ocr_output),
             "jsonMatch": _parse_json_field(file.json_match),
-            "verification": _parse_json_field(file.verification_data),
         }
+        if key == "malpractice_insurance":
+            base["verification"] = "Insurance Policy Verification"
+            base["verificationDetails"] = _parse_json_field(file.verification_data)
+        else:
+            base["verification"] = _parse_json_field(file.verification_data)
+        response_files[key] = base
 
 
     # Ensure placeholders for expected provider tiles
     expected_provider_types = [
-        "MEDICAL_TRAINING_CERTIFICATE", "DEA", "COI", "CV"
+        "MEDICAL_TRAINING_CERTIFICATE", "DEA", "CV", "malpractice_insurance"
     ]
     for t in expected_provider_types:
         if t not in response_files:
-            response_files[t] = {
+            placeholder = {
                 "filename": None,
                 "fileType": t,
                 "fileExtension": None,
@@ -209,8 +218,13 @@ async def get_upload_info(
                 "pdfMatch": {},
                 "ocrData": {},
                 "jsonMatch": {},
-                "verification": {},
             }
+            if t == "malpractice_insurance":
+                placeholder["verification"] = "Insurance Policy Verification"
+                placeholder["verificationDetails"] = {}
+            else:
+                placeholder["verification"] = {}
+            response_files[t] = placeholder
 
     return {
         "formId": formId,
@@ -256,18 +270,6 @@ async def get_upload_info_psv(
                 "abms_participating_in_moc",
             ],
         },
-        "DEA": {
-            "verification": "DEA Verification",
-            "ocr_keys": [
-                "Registrant Name",
-                "DEA Registration Number",
-                "Business Address",
-                "Controlled Substance Schedules",
-                "Business Activity",
-                "Issue Date",
-                "Expiration Date",
-            ],
-        },
         "license_board": {
             "verification": "License Number Match",
             "ocr_keys": [
@@ -290,7 +292,6 @@ async def get_upload_info_psv(
             ],
         },
         "sanctions": {"verification": None, "ocr_keys": []},
-        "hospital_privileges": {"verification": None, "ocr_keys": []},
         "malpractice_insurance": {
             "verification": "Insurance Policy Verification",
             "ocr_keys": [
