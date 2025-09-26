@@ -46,13 +46,18 @@ def upsert_npi_doc(session, form_id: str, verification_details: Dict[str, Any]):
     if not row:
         row = UploadedDocument(
             form_id=form_id,
-            filename=f"npi_{form_id}.json",
-            file_extension="json",
+            filename=f"{verification_details['npi']}_NPI.png",
+            file_extension="png",
             file_type="npi",
             status="In Progress",
         )
         session.add(row)
         session.flush()
+
+    else:
+        row.filename = f"{verification_details['npi']}_NPI.png"
+        row.file_extension = "png"
+
     row.ocr_output = json.dumps({})
     row.verification_data = json.dumps(verification_details or {})
     if not row.status:
@@ -60,16 +65,18 @@ def upsert_npi_doc(session, form_id: str, verification_details: Dict[str, Any]):
 
 
 def main():
-    excel_path = os.environ.get("OTHER_ATTR_XLSX", os.path.join(ROOT_DIR, "data", "Other_Attributes_Schema.xlsx"))
+    excel_path = os.path.join(ROOT_DIR, "data", "Other_Attributes_Schema.xlsx")
+    sheet_name = "NPI"
+
     if not os.path.exists(excel_path):
         print(f"Excel file not found at {excel_path}")
         sys.exit(1)
 
     wb = load_workbook(excel_path, data_only=True)
-    if "NPI" not in wb.sheetnames:
-        print("Sheet 'NPI' not found in workbook")
+    if sheet_name not in wb.sheetnames:
+        print(f"Sheet '{sheet_name}' not found in workbook")
         sys.exit(1)
-    ws = wb["NPI"]
+    ws = wb[sheet_name]
 
     # Detect header row by scanning first 6 rows for any cell containing 'npi'
     header_row = None
