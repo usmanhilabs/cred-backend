@@ -95,7 +95,7 @@ def upsert_medical_certificate(db: Session, form_id: str, payload: Dict[str, Any
     row = (
         db.query(UploadedDocument)
         .filter(UploadedDocument.form_id == form_id)
-        .filter(UploadedDocument.file_type == "medical_certificate")
+        .filter(UploadedDocument.file_type == "MEDICAL_TRAINING_CERTIFICATE")
         .first()
     )
     if not row:
@@ -103,7 +103,7 @@ def upsert_medical_certificate(db: Session, form_id: str, payload: Dict[str, Any
             form_id=form_id,
             filename=f"medical_cert_{form_id}.json",
             file_extension="json",
-            file_type="medical_certificate",
+            file_type="MEDICAL_TRAINING_CERTIFICATE",
             status="In Progress",
         )
         db.add(row)
