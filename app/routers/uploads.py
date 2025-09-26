@@ -6,6 +6,7 @@ from ..database import SessionLocal
 import os
 import ast
 import json
+from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/api/forms", tags=["Uploads"])
 UPLOAD_DIR = "uploads"
@@ -71,7 +72,11 @@ async def upload_file(
         db.close()
 
 
-def get_progress(type):
+def get_progress(type, status):
+    if status == "Approved":
+        return 100
+    if status == "In Progress":
+        return 50
     if type == "npi":
         return 100
     elif type == "malpractice_insurance":
@@ -83,7 +88,7 @@ def get_progress(type):
     elif type in ("cv", "cv/resume"):
         return 60
     elif type in ("MEDICAL_TRAINING_CERTIFICATE",):
-        return 90
+        return 60
     elif type in ("board_certification",):
         return 85
     elif type in ("license_board",):
@@ -189,7 +194,7 @@ async def get_upload_info(
             "fileExtension": file.file_extension,
             "fileId": file.id,
             "status": file.status,
-            "progress": get_progress(key),
+            "progress": get_progress(key, file.status),
             "pdfMatch": _parse_json_field(file.pdf_match),
             "ocrData": _parse_json_field(file.ocr_output),
             "jsonMatch": _parse_json_field(file.json_match),
@@ -214,7 +219,7 @@ async def get_upload_info(
                 "fileExtension": None,
                 "fileId": None,
                 "status": None,
-                "progress": get_progress(t),
+                "progress": get_progress(t, None),
                 "pdfMatch": {},
                 "ocrData": {},
                 "jsonMatch": {},
@@ -344,10 +349,38 @@ async def get_upload_info_psv(
                 "fileExtension": None,
                 "fileId": None,
                 "status": None,
-                "progress": get_progress(ft),
+                "progress": get_progress(f,None),
                 "pdfMatch": {},
                 "ocrData": {},
                 "verification": meta["verification"],
             }
 
     return {"formId": formId, "files": files}
+
+@router.post("/upload-status-update")
+async def upload_status_update(
+    formId: str = Query(...),
+    statusUpdate: str = Query(...),
+    fileType: str = Query(...)
+):
+    db: Session = SessionLocal()
+    try:
+        docs = db.query(UploadedDocument).filter(
+            UploadedDocument.form_id == formId,
+            UploadedDocument.file_type == fileType
+        ).all()
+        if not docs:
+            db.close()
+            return JSONResponse({"formId": None, "files": {}, "comments": []}, status_code=404)
+
+        for doc in docs:
+            if statusUpdate == "Accepted":
+                doc.status = "Approved"
+            elif statusUpdate == "Rejected":
+                doc.status = "In Progress"
+
+        db.commit()
+    finally:
+        db.close()
+
+    return await get_upload_info(formId=str(formId), appId=None, uploadIds=None)
