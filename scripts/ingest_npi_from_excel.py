@@ -2,7 +2,7 @@ import os
 import sys
 import json
 from typing import Optional, Dict, Any
-
+import zipfile
 from openpyxl import load_workbook
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -11,7 +11,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from app.database import SessionLocal  # type: ignore
-from app.models import Application, UploadedDocument, FormData  # type: ignore
+from app.models import Application, UploadedDocument, FormData, SavedFile  # type: ignore
 
 
 def normalize_npi(value: Optional[str]) -> Optional[str]:
@@ -62,6 +62,22 @@ def upsert_npi_doc(session, form_id: str, verification_details: Dict[str, Any]):
     row.verification_data = json.dumps(verification_details or {})
     if not row.status:
         row.status = "In Progress"
+
+
+def ingest_files_from_zip(session, zip_path):
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for file_info in zf.infolist():
+            if file_info.filename.lower().endswith(".png"):
+                file_data = zf.read(file_info.filename)
+                base_filename = os.path.basename(file_info.filename)
+                saved_file = SavedFile(
+                    filename=base_filename,
+                    file_type="png",
+                    file_data=file_data,
+                    attribute = "npi"
+                )
+                session.add(saved_file)
+        session.commit()
 
 
 def main():
@@ -161,6 +177,15 @@ def main():
         raise
     finally:
         session.close()
+
+    zip_path = os.path.join(ROOT_DIR, "data", "SCREENSHOT 2.zip")
+    if os.path.exists(zip_path):
+        session = SessionLocal()
+        try:
+            ingest_files_from_zip(session, zip_path)
+            print("Files from zip saved to DB.")
+        finally:
+            session.close()
 
 
 if __name__ == "__main__":

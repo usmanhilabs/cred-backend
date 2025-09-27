@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, Text, ForeignKey, DateTime, Date
+from sqlalchemy import Column, Integer, String, Boolean, Text, ForeignKey, DateTime, Date, LargeBinary
 from sqlalchemy.orm import declarative_mixin
 from .database import Base
 from datetime import datetime
@@ -107,3 +107,12 @@ class ApplicationEvent(Base):
     event_type = Column(String)  # e.g., SYSTEM, COMMENT, STATUS_CHANGE
     message = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+class SavedFile(Base):
+    __tablename__ = "saved_files"
+    id = Column(Integer, primary_key=True)
+    filename = Column(String, nullable=False)
+    file_type = Column(String, nullable=False)
+    attribute = Column(String, nullable=True)
+    file_data = Column(LargeBinary, nullable=False)  # Store file content as BLOB
+    created_at = Column(DateTime, default=datetime.utcnow)
