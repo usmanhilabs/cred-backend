@@ -1,4 +1,5 @@
 import os
+import zipfile
 import sys
 import json
 import re
@@ -12,7 +13,7 @@ if PROJECT_ROOT not in sys.path:
 import openpyxl  # type: ignore
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
-from app.models import UploadedDocument, Application, FormData
+from app.models import UploadedDocument, Application, FormData, SavedFile
 
 EXCEL_PATH = os.path.join(PROJECT_ROOT, "data", "BoardCertificate_License_Schema.xlsx")
 SHEET_NAME = "License Board"
@@ -297,8 +298,7 @@ def build_payload(rec: Dict[str, Any]) -> Dict[str, Any]:
         "verification": verification,
     }
 
-
-def upsert_license_board(db: Session, form_id: str, payload: Dict[str, Any]):
+def upsert_license_board(db: Session, form_id: str, payload: Dict[str, Any], filename: str):
     row = (
         db.query(UploadedDocument)
         .filter(UploadedDocument.form_id == form_id)
@@ -308,19 +308,46 @@ def upsert_license_board(db: Session, form_id: str, payload: Dict[str, Any]):
     if not row:
         row = UploadedDocument(
             form_id=form_id,
-            filename=f"license_board_{form_id}.json",
-            file_extension="json",
+            filename=filename,
+            file_extension="png",
             file_type="license_board",
             status="In Progress",
         )
         db.add(row)
         db.flush()
+    else:
+        row.filename = filename  # Ensure filename is updated
+        row.file_extension = "png"
+    row.filename = filename  # Ensure filename is updated
     row.ocr_output = json.dumps(payload.get("ocr", {}))
     row.verification_data = json.dumps(payload.get("verification", {}))
     if not row.status:
         row.status = "In Progress"
     return row
 
+def ingest_board_cert_files(zip_path, npi_list):
+    session = SessionLocal()
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for file_info in zf.infolist():
+                for npi in npi_list:
+                    if npi in file_info.filename:
+                        file_data = zf.read(file_info.filename)
+                        saved_file = SavedFile(
+                            filename=f"{npi}_Licence.png",
+                            file_type="png",
+                            file_data=file_data,
+                            attribute="license_board_certification",
+                        )
+                        session.add(saved_file)
+                        break  # Avoid duplicate uploads for the same file
+        session.commit()
+        print("Board certification files ingested.")
+    except Exception as e:
+        session.rollback()
+        print(f"Error: {e}")
+    finally:
+        session.close()
 
 def main():
     rows = load_rows(EXCEL_PATH)
@@ -337,9 +364,24 @@ def main():
             if a.npi and a.form_id:
                 npi_to_form.setdefault(str(a.npi).strip(), a.form_id)
 
+        # After loading rows
+        npi_list = []
+        for rec in rows:
+            npi_raw = rec.get("npi") or rec.get("NPI") or rec.get("provider_npi")
+            if npi_raw:
+                try:
+                    npi = str(int(npi_raw)) if isinstance(npi_raw, (int, float)) else str(npi_raw)
+                    npi = npi.strip()
+                except Exception:
+                    npi = str(npi_raw).strip()
+                npi_list.append(npi)
+        print(npi_list)
+        zip_path = os.path.join(PROJECT_ROOT, "data", "CA_License_Details_Sample 1 (1).zip")
+        ingest_board_cert_files(zip_path, npi_list)
+        print("Files ingested in DB")
+
         upserts = 0
         for rec in rows:
-            # Prefer NPI linkage
             npi_raw = rec.get("npi") or rec.get("NPI") or rec.get("provider_npi")
             if not npi_raw:
                 continue
@@ -352,8 +394,10 @@ def main():
             if not form_id:
                 continue
             payload = build_payload(rec)
-            upsert_license_board(db, form_id, payload)
+            filename = f"{npi}_Licence.png"
+            upsert_license_board(db, form_id, payload, filename)
             upserts += 1
+
         db.commit()
         print(f"License Board ingest complete. Upserts={upserts}")
     finally:

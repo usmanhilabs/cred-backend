@@ -11,7 +11,7 @@ if PROJECT_ROOT not in sys.path:
 import openpyxl  # type: ignore
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
-from app.models import UploadedDocument, Application, FormData
+from app.models import UploadedDocument, Application, FormData, SavedFile
 
 EXCEL_PATH = os.path.join(PROJECT_ROOT, "data", "BoardCertificate_License_Schema.xlsx")
 SHEET_NAME = "Board_Certification"
@@ -179,7 +179,7 @@ def build_payload(rec: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def upsert_board_certification(db: Session, form_id: str, payload: Dict[str, Any]):
+def upsert_board_certification(db: Session, form_id: str, payload: Dict[str, Any], filename: str = None):
     row = (
         db.query(UploadedDocument)
         .filter(UploadedDocument.form_id == form_id)
@@ -189,18 +189,48 @@ def upsert_board_certification(db: Session, form_id: str, payload: Dict[str, Any
     if not row:
         row = UploadedDocument(
             form_id=form_id,
-            filename=f"board_cert_{form_id}.json",
-            file_extension="json",
+            filename=filename,
+            file_extension="png",
             file_type="board_certification",
             status="In Progress",
         )
         db.add(row)
         db.flush()
+    else:
+        row.filename = filename
+        row.file_extension = "png"
     row.ocr_output = json.dumps(payload.get("ocr", {}))
     row.verification_data = json.dumps(payload.get("verification", {}))
     if not row.status:
         row.status = "In Progress"
     return row
+
+import zipfile
+
+def ingest_board_files(zip_path, npi_list):
+    session = SessionLocal()
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for file_info in zf.infolist():
+                for npi in npi_list:
+                    if npi in file_info.filename:
+                        file_data = zf.read(file_info.filename)
+                        filename = f"{npi}_Board_Certificate.png"
+                        saved_file = SavedFile(
+                            filename=filename,
+                            file_type="png",
+                            file_data=file_data,
+                            attribute="board_certificate",
+                        )
+                        session.add(saved_file)
+                        break  # Avoid duplicate uploads for the same file
+        session.commit()
+        print("Board files ingested.")
+    except Exception as e:
+        session.rollback()
+        print(f"Error: {e}")
+    finally:
+        session.close()
 
 
 def main():
@@ -211,16 +241,26 @@ def main():
     try:
         # Build NPI -> form_id index
         npi_to_form: Dict[str, str] = {}
+        npi_list = []
         for f in db.query(FormData).all():
             if f.npi and f.form_id:
-                npi_to_form[str(f.npi).strip()] = f.form_id
+                npi_str = str(f.npi).strip()
+                npi_to_form[npi_str] = f.form_id
+                npi_list.append(npi_str)
         for a in db.query(Application).all():
             if a.npi and a.form_id:
-                npi_to_form.setdefault(str(a.npi).strip(), a.form_id)
+                npi_str = str(a.npi).strip()
+                npi_to_form.setdefault(npi_str, a.form_id)
+                if npi_str not in npi_list:
+                    npi_list.append(npi_str)
+
+        # Ingest board certificate files from zip
+        zip_path = os.path.join(PROJECT_ROOT, "data", "CA_ABMS_Sample 1.zip")
+        ingest_board_files(zip_path, npi_list)
 
         upserts = 0
         for rec in rows:
-            # Determine form by NPI
+            # ... (existing upsert logic)
             nrec = _norm_keys(rec)
             npi_val = None
             for cand in ("npi", "providernpi", "provider_npi"):
@@ -238,12 +278,54 @@ def main():
             if not form_id:
                 continue
             payload = build_payload(rec)
-            upsert_board_certification(db, form_id, payload)
+            filename = f"{npi}_Board_Certificate.png"
+            upsert_board_certification(db, form_id, payload, filename)
             upserts += 1
         db.commit()
         print(f"Board Certification ingest complete. Upserts={upserts}")
     finally:
         db.close()
+# def main():
+#     rows = load_rows(EXCEL_PATH)
+#     print(f"Loaded Board_Certification rows: {len(rows)}")
+#
+#     db: Session = SessionLocal()
+#     try:
+#         # Build NPI -> form_id index
+#         npi_to_form: Dict[str, str] = {}
+#         for f in db.query(FormData).all():
+#             if f.npi and f.form_id:
+#                 npi_to_form[str(f.npi).strip()] = f.form_id
+#         for a in db.query(Application).all():
+#             if a.npi and a.form_id:
+#                 npi_to_form.setdefault(str(a.npi).strip(), a.form_id)
+#
+#         upserts = 0
+#         for rec in rows:
+#             # Determine form by NPI
+#             nrec = _norm_keys(rec)
+#             npi_val = None
+#             for cand in ("npi", "providernpi", "provider_npi"):
+#                 if cand in nrec and nrec[cand] not in (None, ""):
+#                     npi_val = nrec[cand]
+#                     break
+#             if not npi_val:
+#                 continue
+#             try:
+#                 npi = str(int(npi_val)) if isinstance(npi_val, (int, float)) else str(npi_val)
+#                 npi = npi.strip()
+#             except Exception:
+#                 npi = str(npi_val).strip()
+#             form_id = npi_to_form.get(npi)
+#             if not form_id:
+#                 continue
+#             payload = build_payload(rec)
+#             upsert_board_certification(db, form_id, payload)
+#             upserts += 1
+#         db.commit()
+#         print(f"Board Certification ingest complete. Upserts={upserts}")
+#     finally:
+#         db.close()
 
 
 if __name__ == "__main__":
