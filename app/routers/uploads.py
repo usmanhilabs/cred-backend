@@ -1,7 +1,8 @@
 from fastapi import APIRouter, UploadFile, File, Form, Query
 from typing import Optional
 from sqlalchemy.orm import Session
-from ..models import UploadedDocument, FormData, Application, ApplicationEvent
+from ..models import UploadedDocument, FormData, Application, ApplicationEvent, SavedFile
+import base64
 from ..database import SessionLocal
 import os
 import ast
@@ -354,6 +355,24 @@ async def get_upload_info_psv(
                 "ocrData": {},
                 "verification": meta["verification"],
             }
+
+    npi_file_info = files.get("npi")
+    if npi_file_info and npi_file_info["filename"]:
+        db_file = db.query(SavedFile).filter(SavedFile.filename == npi_file_info["filename"]).first()
+        if db_file:
+            # Encode file data as base64 for safe transport
+            npi_file_info["file"] = base64.b64encode(db_file.file_data).decode("utf-8")
+        else:
+            npi_file_info["file"] = None
+
+    for key in ["license_board", "board_certification"]:
+        file_info = files.get(key)
+        if file_info and file_info["filename"]:
+            db_file = db.query(SavedFile).filter(SavedFile.filename == file_info["filename"]).first()
+            if db_file:
+                file_info["file"] = base64.b64encode(db_file.file_data).decode("utf-8")
+            else:
+                file_info["file"] = None
 
     return {"formId": formId, "files": files}
 
