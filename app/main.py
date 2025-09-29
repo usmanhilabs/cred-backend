@@ -110,15 +110,9 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-origins = [
-    "http://localhost:9002",
-    "http://127.0.0.1:9002",
-    "http://44.207.130.50:9002 ",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # You can use ["*"] for testing, but not recommended for production
+    allow_origins=["*"],  # You can use ["*"] for testing, but not recommended for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
