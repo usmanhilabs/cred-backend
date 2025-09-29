@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
+from rich import status
 from sqlalchemy import desc 
 from sqlalchemy.orm import Session
 from app.schemas import ApplicationCreate, ApplicationResponse
@@ -396,3 +397,17 @@ def get_application_by_id(app_id: str, db: Session = Depends(get_db)):
         },
         "timeline": events,
     }
+
+@router.delete("/{app_id}")
+def delete_application(app_id: str, db: Session = Depends(get_db)):
+    # Delete related records
+    db.query(FormData).filter(FormData.form_id == app_id).delete()
+    db.query(UploadedDocument).filter(UploadedDocument.form_id == app_id).delete()
+    db.query(EmailRecord).filter(EmailRecord.application_id == app_id).delete()
+    db.query(ApplicationEvent).filter(ApplicationEvent.application_id == app_id).delete()
+    # Delete application
+    deleted = db.query(Application).filter(Application.id == app_id).delete()
+    db.commit()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Application not found")
+    return
