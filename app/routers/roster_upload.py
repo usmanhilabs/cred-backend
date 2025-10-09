@@ -12,17 +12,14 @@ from app.schemas import ApplicationCreate, ApplicationResponse
 from app.utils import compute_progress
 
 router = APIRouter()
-
-AWS_ACCESS_KEY_ID = "AKIA224YAF5K2VSAWHMY"
-AWS_SECRET_ACCESS_KEY = "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"
-AWS_REGION = "us-east-1"
-S3_BUCKET = "provider-credentialing"
+import os
+import boto3
 
 s3_client = boto3.client(
     "s3",
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-    region_name=AWS_REGION,
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name="us-east-1",
 )
 
 
@@ -50,22 +47,26 @@ def create_or_update_application(app_data: ApplicationCreate, db: Session) -> Ap
     db.commit()
     db.refresh(application)
 
-    form_data = FormData(
-        form_id=application.form_id,
-        provider_id=application.provider_id,
-        provider_name=application.name,
-        provider_last_name=application.last_name,
-        npi=application.npi,
-        email=application.email,
-        phone=application.phone,
-        specialty=application.specialty,
-        address=application.address
-    )
-    db.add(form_data)
-    db.commit()
-    db.refresh(form_data)
+    # Check if FormData already exists for this form_id
+    existing_form = db.query(FormData).filter(FormData.form_id == application.form_id).first()
+    if not existing_form:
+        form_data = FormData(
+            form_id=application.form_id,
+            provider_id=application.provider_id,
+            provider_name=application.name,
+            provider_last_name=application.last_name,
+            npi=application.npi,
+            email=application.email,
+            phone=application.phone,
+            specialty=application.specialty,
+            address=application.address
+        )
+        db.add(form_data)
+        db.commit()
+        db.refresh(form_data)
 
     return model_to_response(application)
+
 
 
 def map_row_to_application(row: dict) -> dict:
