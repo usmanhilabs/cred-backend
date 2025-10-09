@@ -69,12 +69,19 @@ def create_or_update_application(app_data: ApplicationCreate, db: Session) -> Ap
 
 
 
+import hashlib
+
+def generate_form_id(row: dict) -> str:
+    # Create a deterministic key for the provider
+    unique_key = f"{row.get('Provider NPI')}-{row.get('First Name')}-{row.get('Middle Name')}-{row.get('Provider Last Name')}-{row.get('State License')}-{row.get('State Issuing License')}"
+    return hashlib.md5(unique_key.encode()).hexdigest()
+
 def map_row_to_application(row: dict) -> dict:
     address = f"{row.get('Addr Line 1', '')} {row.get('Addr Line 2', '')} {row.get('City', '')} {row.get('State', '')} {row.get(' Zip+4', '')}".strip()
     return {
         "id": str(uuid.uuid4()),
         "providerId": str(row.get("Org Enterprise ID (EID)(For Internal Use Only.)") or ""),
-        "formId": str(row.get("Form ID") or str(uuid.uuid4())),
+        "formId": str(row.get("Form ID") or generate_form_id(row)),   # ✅ FIXED
         "name": f"{row.get('Provider First Name', '')} {row.get('Provider Last Name', '')}".strip(),
         "providerLastName": row.get("Provider Last Name") or "",
         "email": row.get("Provider Email") or "",
@@ -92,6 +99,7 @@ def map_row_to_application(row: dict) -> dict:
         "lastUpdtDt": datetime.now(),
         "psvOriginalLabel": "Sanctioned"
     }
+
 
 
 import tempfile
