@@ -1,5 +1,7 @@
-from sqlalchemy import Column, Integer, String, Boolean, Text, ForeignKey, DateTime, Date, LargeBinary
-from sqlalchemy.orm import declarative_mixin
+import uuid
+
+from sqlalchemy import Column, Integer, String, Boolean, Text, ForeignKey, DateTime, Date, LargeBinary, UUID
+from sqlalchemy.orm import declarative_mixin, relationship
 from .database import Base
 from datetime import datetime
 
@@ -116,3 +118,98 @@ class SavedFile(Base):
     attribute = Column(String, nullable=True)
     file_data = Column(LargeBinary, nullable=False)  # Store file content as BLOB
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class FileRecord(Base):
+    __tablename__ = "file_records"   # 👈 consistent name
+
+    file_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    type = Column(String, nullable=False)
+    created_by = Column(String, nullable=False)
+    status = Column(String, default="UPLOADED")
+    file_storage_path = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ServiceStatus(Base):
+    __tablename__ = "service_status"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    file_id = Column(String, ForeignKey("file_records.file_id", ondelete="CASCADE"), nullable=False)  # 👈 match above
+    service_id = Column(String, nullable=False)
+    status = Column(String, default="PROCESS_STARTED")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BoardCertificate(Base):
+    __tablename__ = "Boardcertificate"
+
+    boardcertificate_key = Column(String, primary_key=True)
+    application_id = Column(String, ForeignKey("applications.id"), nullable=False)
+
+    abmsuid = Column(Text)
+    abms_name = Column(Text)
+    abms_dob = Column(Date)
+    abms_education = Column(Text)
+    abms_address = Column(Text)
+    abms_certification_board = Column(Text)
+    abms_certification_type = Column(Text)
+    abms_status = Column(Text)
+    abms_duration = Column(Text)
+    abms_occurrence = Column(Text)
+    abms_start_date = Column(Date)
+    abms_end_date = Column(Date)
+    abms_reverification_date = Column(Date)
+    abms_participating_in_moc = Column(Text)
+
+class BoardCertificateFile(Base):
+    __tablename__ = "boardcertificate_files"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    boardcertificate_key = Column(String, ForeignKey("Boardcertificate.boardcertificate_key"), nullable=False)
+
+    filename = Column(String, nullable=False)
+    file_type = Column(String, nullable=False)
+    file_data = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime)
+
+class License(Base):
+    __tablename__ = "License"
+
+    license_key = Column(String, primary_key=True, nullable=False)  # UUID generated at ingestion
+    application_id = Column(String, ForeignKey("applications.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
+
+    License_Website_Name = Column(String)
+    License_Provider_Match = Column(String)
+    License_Provider_Match_Score = Column(String)
+    License_Website_License_Number = Column(String)
+    Recommendation_License_No = Column(String)
+    License_Website_IssuanceDate = Column(Date)
+    Match_with_input_IssuanceDate = Column(String)
+    License_Website_ExpirationDate = Column(Date)
+    Match_with_input_ExpirationDate = Column(String)
+    License_Expiry_Issue = Column(String)
+    License_Website_BoardName = Column(String)
+    License_Website_LicenseType = Column(String)
+    License_Website_PrimaryStatus = Column(String)
+    License_Website_Specialty = Column(String)
+    License_Website_Qualification = Column(String)
+    License_Website_SchoolName = Column(String)
+    License_Website_GraduationYear = Column(String)
+    License_Website_PreviousNames = Column(String)
+    License_Website_Address = Column(String)
+    License_Website_CurrentDateTime = Column(DateTime)
+    License_Website_ProfessionalUrl = Column(String)
+    License_Website_DisciplinaryActions = Column(String)
+    License_Website_Public_Record_Actions = Column(String)
+
+class LicenseFile(Base):
+    __tablename__ = "license_files"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    license_key = Column(String, ForeignKey("License.license_key", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
+
+    filename = Column(String, nullable=False)
+    file_type = Column(String, nullable=False)
+    file_data = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime)

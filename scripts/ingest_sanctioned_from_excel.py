@@ -105,6 +105,41 @@ def upsert_sanction(db: Session, form_id: str, payload: Dict[str, Any]):
         row.status = "In Progress"
     return row
 
+def ingest_sanctions_file(file_path: str, db: Session):
+    records = load_sheet(file_path)
+    npi_to_form = {}
+    # Build quick index: NPI -> form_id (prefer direct form_data match)
+    for f in db.query(FormData).all():
+        if f.npi:
+            npi_to_form[str(f.npi).strip()] = f.form_id
+    # Fallback via applications table
+    for a in db.query(Application).all():
+        if a.npi and a.form_id:
+            npi_to_form.setdefault(str(a.npi).strip(), a.form_id)
+
+    upserts = 0
+    app_updates = 0
+    for rec in records:
+        raw_npi = rec.get("provider_npi") or rec.get("npi")
+        npi = str(int(raw_npi)) if isinstance(raw_npi, (int, float)) else str(raw_npi or "").strip()
+        form_id = npi_to_form.get(npi)
+        if not form_id:
+            continue
+        payload = normalized_payload(rec)
+        upsert_sanction(db, form_id, payload)
+        upserts += 1
+        # Mark application as SANCTIONED if NPI matches
+        app = db.query(Application).filter(Application.form_id == form_id).first()
+        if app:
+            if app.psv_status != "SANCTIONED":
+                app.psv_status = "SANCTIONED"
+            if app.committee_status != "SANCTIONED":
+                app.committee_status = "SANCTIONED"
+            app_updates += 1
+    db.commit()
+    return {"upserts": upserts, "applications_marked": app_updates}
+
+
 
 def main():
     excel_path = os.path.join(PROJECT_ROOT, "data", "Other_Attributes_Schema.xlsx")

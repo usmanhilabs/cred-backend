@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, engine
 from apscheduler.schedulers.background import BackgroundScheduler
-from .routers import forms, uploads, applications, documents, emails, executive_summary, psv_info
+from .routers import forms, uploads, applications, documents, emails, executive_summary, psv_info, ingest, roster_upload
 from sqlalchemy.orm import Session
 from .utils import get_db, reference_keys_map
 import os, json
@@ -131,3 +131,5 @@ app.include_router(documents.router)
 app.include_router(emails.router)
 app.include_router(executive_summary.router)
 app.include_router(psv_info.router)
+app.include_router(ingest.router)
+app.include_router(roster_upload.router)

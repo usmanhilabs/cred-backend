@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, Query
 from typing import Optional
 from sqlalchemy.orm import Session
-from ..models import UploadedDocument, FormData, Application, ApplicationEvent, SavedFile
+from ..models import UploadedDocument, FormData, Application, ApplicationEvent, SavedFile, BoardCertificate
 import base64
 from ..database import SessionLocal
 import os
@@ -403,3 +403,33 @@ async def upload_status_update(
         db.close()
 
     return await get_upload_info(formId=str(formId), appId=None, uploadIds=None)
+
+@router.post("/upload-status-update-psv-new")
+async def upload_status_update_psv_new(
+    appId: Optional[str] = Query(None)):
+
+    db: Session = SessionLocal()
+    try:
+        application = db.query(Application).filter(Application.id == appId).first()
+        if not application:
+            db.close()
+            return JSONResponse({"appId": None, "files": {}, "comments": []}, status_code=404)
+
+        docs = db.query(BoardCertificate).filter(
+            BoardCertificate.application_id == appId)
+
+        if not docs:
+            db.close()
+            return JSONResponse({"appId": None, "files": {}, "comments": []}, status_code=404)
+
+
+
+        for doc in docs:
+            if doc.status == "New":
+                doc.status = "In Progress"
+
+        db.commit()
+    finally:
+        db.close()
+
+

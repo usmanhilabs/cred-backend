@@ -285,47 +285,47 @@ def main():
         print(f"Board Certification ingest complete. Upserts={upserts}")
     finally:
         db.close()
-# def main():
-#     rows = load_rows(EXCEL_PATH)
-#     print(f"Loaded Board_Certification rows: {len(rows)}")
-#
-#     db: Session = SessionLocal()
-#     try:
-#         # Build NPI -> form_id index
-#         npi_to_form: Dict[str, str] = {}
-#         for f in db.query(FormData).all():
-#             if f.npi and f.form_id:
-#                 npi_to_form[str(f.npi).strip()] = f.form_id
-#         for a in db.query(Application).all():
-#             if a.npi and a.form_id:
-#                 npi_to_form.setdefault(str(a.npi).strip(), a.form_id)
-#
-#         upserts = 0
-#         for rec in rows:
-#             # Determine form by NPI
-#             nrec = _norm_keys(rec)
-#             npi_val = None
-#             for cand in ("npi", "providernpi", "provider_npi"):
-#                 if cand in nrec and nrec[cand] not in (None, ""):
-#                     npi_val = nrec[cand]
-#                     break
-#             if not npi_val:
-#                 continue
-#             try:
-#                 npi = str(int(npi_val)) if isinstance(npi_val, (int, float)) else str(npi_val)
-#                 npi = npi.strip()
-#             except Exception:
-#                 npi = str(npi_val).strip()
-#             form_id = npi_to_form.get(npi)
-#             if not form_id:
-#                 continue
-#             payload = build_payload(rec)
-#             upsert_board_certification(db, form_id, payload)
-#             upserts += 1
-#         db.commit()
-#         print(f"Board Certification ingest complete. Upserts={upserts}")
-#     finally:
-#         db.close()
+def main():
+    rows = load_rows(EXCEL_PATH)
+    print(f"Loaded Board_Certification rows: {len(rows)}")
+
+    db: Session = SessionLocal()
+    try:
+        # Build NPI -> form_id index
+        npi_to_form: Dict[str, str] = {}
+        for f in db.query(FormData).all():
+            if f.npi and f.form_id:
+                npi_to_form[str(f.npi).strip()] = f.form_id
+        for a in db.query(Application).all():
+            if a.npi and a.form_id:
+                npi_to_form.setdefault(str(a.npi).strip(), a.form_id)
+
+        upserts = 0
+        for rec in rows:
+            # Determine form by NPI
+            nrec = _norm_keys(rec)
+            npi_val = None
+            for cand in ("npi", "providernpi", "provider_npi"):
+                if cand in nrec and nrec[cand] not in (None, ""):
+                    npi_val = nrec[cand]
+                    break
+            if not npi_val:
+                continue
+            try:
+                npi = str(int(npi_val)) if isinstance(npi_val, (int, float)) else str(npi_val)
+                npi = npi.strip()
+            except Exception:
+                npi = str(npi_val).strip()
+            form_id = npi_to_form.get(npi)
+            if not form_id:
+                continue
+            payload = build_payload(rec)
+            upsert_board_certification(db, form_id, payload)
+            upserts += 1
+        db.commit()
+        print(f"Board Certification ingest complete. Upserts={upserts}")
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":

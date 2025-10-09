@@ -63,6 +63,8 @@ def upsert_npi_doc(session, form_id: str, verification_details: Dict[str, Any]):
     if not row.status:
         row.status = "In Progress"
 
+    session.flush()
+
 
 def ingest_files_from_zip(session, zip_path):
     with zipfile.ZipFile(zip_path, "r") as zf:
