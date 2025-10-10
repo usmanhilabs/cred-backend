@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File as FastAPIFile, HTTPException
+from fastapi import APIRouter, UploadFile, File as FastAPIFile, HTTPException, Depends
 import boto3, pandas as pd
 from io import BytesIO
 from sqlalchemy.orm import Session
@@ -81,23 +81,23 @@ def map_row_to_application(row: dict) -> dict:
     return {
         "id": str(uuid.uuid4()),
         "providerId": str(row.get("Org Enterprise ID (EID)(For Internal Use Only.)") or ""),
-        "formId": str(row.get("Form ID") or generate_form_id(row)),   # ✅ FIXED
-        "name": f"{row.get('Provider First Name', '')} {row.get('Provider Last Name', '')}".strip(),
+        "formId": str(row.get("Form ID") or generate_form_id(row)),
+        "name": f"{row.get('First Name', '')} {row.get('Middle Name', '')} {row.get('Provider Last Name', '')}".strip(),
         "providerLastName": row.get("Provider Last Name") or "",
         "email": row.get("Provider Email") or "",
         "phone": str(row.get("Phone Number") or ""),
         "specialty": row.get("Provider Primary Specialty") or "",
         "address": address,
         "npi": str(row.get("Provider NPI") or ""),
-        "psvStatus": "SANCTIONED",
-        "committeeStatus": "SANCTIONED",
+        "psvStatus": "New",
+        "committeeStatus": "New",
         "progress": 5,
-        "assignee": "Aiden Parker",
+        "assignee": "Unassigned",
         "source": "Manual Entry",
-        "market": row.get("Contracted State") or "",
+        "market": row.get("State") or "",
         "createDt": datetime.now(),
         "lastUpdtDt": datetime.now(),
-        "psvOriginalLabel": "Sanctioned"
+        "psvOriginalLabel": ""
     }
 
 
@@ -137,24 +137,20 @@ async def upload_to_s3(file: UploadFile = FastAPIFile(...)):
         df = df.drop_duplicates(subset=dedupe_columns, keep="first")
         after_count = len(df)
 
-        # Extract state (take first row’s Contracted State)
+        # Extract state
         state = str(df["Contracted State"].iloc[0]) if "Contracted State" in df.columns else "UNKNOWN"
 
-        # Build S3 paths
+        # Always use .csv for uploads
         bucket = "webscraping-hilabs-databucket2"
-        dedup_key = f"Credentialing/Release_1/Intake/Roster/raw_file/{file_id}_deduplicated{ext}"
-        license_key = f"Credentialing/Release_1/PSV/License/{state}/input/{file_id}_licenseA{ext}"
-        sanctions_key = f"Credentialing/Release_1/PSV/Sanctions/{state}/input/{file_id}_licenseB{ext}"
+        dedup_key = f"Credentialing/Release_1/Intake/Roster/raw_file/{file_id}_deduplicated.csv"
+        license_key = f"Credentialing/Release_1/PSV/License/{state}/input/{file_id}_licenseA.csv"
+        sanctions_key = f"Credentialing/Release_1/PSV/Sanctions/{state}/input/{file_id}_licenseB.csv"
 
         # --- Upload deduplicated ISF ---
         dedup_buffer = BytesIO()
-        if ext.lower() == ".csv":
-            df.to_csv(dedup_buffer, index=False)
-        else:
-            df.to_excel(dedup_buffer, index=False, engine="openpyxl")
+        df.to_csv(dedup_buffer, index=False)
         dedup_buffer.seek(0)
         s3_client.upload_fileobj(dedup_buffer, bucket, dedup_key)
-        print(f"✅ Deduplicated ISF uploaded to S3 → s3://{bucket}/{dedup_key}")
 
         # --- Transformation A ---
         df_a = pd.DataFrame({
@@ -169,13 +165,9 @@ async def upload_to_s3(file: UploadFile = FastAPIFile(...)):
             "License Expiration Date": df["License Term Date"],
         })
         buf_a = BytesIO()
-        if ext.lower() == ".csv":
-            df_a.to_csv(buf_a, index=False)
-        else:
-            df_a.to_excel(buf_a, index=False, engine="openpyxl")
+        df_a.to_csv(buf_a, index=False)
         buf_a.seek(0)
         s3_client.upload_fileobj(buf_a, bucket, license_key)
-        print(f"✅ License File A uploaded to S3 → s3://{bucket}/{license_key}")
 
         # --- Transformation B ---
         df_b = pd.DataFrame({
@@ -190,12 +182,10 @@ async def upload_to_s3(file: UploadFile = FastAPIFile(...)):
             "State": df["State Issuing License"],
         })
         buf_b = BytesIO()
-        if ext.lower() == ".csv":
-            df_b.to_csv(buf_b, index=False)
-        else:
-            df_b.to_excel(buf_b, index=False, engine="openpyxl")
+        df_b.to_csv(buf_b, index=False)
         buf_b.seek(0)
         s3_client.upload_fileobj(buf_b, bucket, sanctions_key)
+
         print(f"✅ License File B uploaded to S3 → s3://{bucket}/{sanctions_key}")
 
         # --- DB record for file ---
@@ -249,3 +239,55 @@ async def upload_to_s3(file: UploadFile = FastAPIFile(...)):
 
     finally:
         db.close()
+
+
+from app.models import ServiceExecution
+from app.schemas import ServiceExecutionRequest, ServiceName
+
+
+@router.post("/service/record")
+def record_service_execution(request: ServiceExecutionRequest):
+    db: Session = SessionLocal()
+    # Save to DB
+    new_record = ServiceExecution(
+        file_id=request.file_id,
+        service_id=request.service_id,
+        execution_id=request.execution_id,
+        service_name=request.service_name.value,
+        file_path=request.file_path,
+        message=request.message,
+        status=request.status
+    )
+    db.add(new_record)
+    db.commit()
+    db.refresh(new_record)
+
+    # ✅ Only proceed if status is SUCCESS
+    if request.status.upper() != "SUCCESS":
+        return {
+            "message": f"Record saved but status={request.status}, stopping workflow.",
+            "id": new_record.id
+        }
+
+    # ✅ Continue to next step if SUCCESS
+    if request.service_name == ServiceName.LICENCE:
+        trigger_licence_service(request)
+    elif request.service_name == ServiceName.NPI:
+        trigger_npi_service(request)
+    elif request.service_name == ServiceName.BoardCertificate:
+        trigger_credentialing_service(request)
+
+    return {"message": "Record saved and next step triggered", "id": new_record.id}
+
+
+
+# Dummy service triggers
+def trigger_licence_service(req: ServiceExecutionRequest):
+    print(f"Triggering Licence Service for {req.file_id}")
+
+def trigger_npi_service(req: ServiceExecutionRequest):
+    print(f"Triggering NPI Service for {req.file_id}")
+
+def trigger_credentialing_service(req: ServiceExecutionRequest):
+    print(f"Triggering Credentialing Service for {req.file_id}")
+

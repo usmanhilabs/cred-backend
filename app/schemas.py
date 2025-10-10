@@ -51,3 +51,20 @@ class EmailCreate(BaseModel):
     body: str
     status: str
     sent_at: datetime
+
+from enum import Enum
+from typing import Optional
+
+class ServiceName(str, Enum):
+    LICENCE = "LICENCE"
+    NPI = "NPI"
+    BoardCertificate = "BoardCertificate"
+
+class ServiceExecutionRequest(BaseModel):
+    file_id: str
+    service_id: str
+    execution_id: str
+    service_name: ServiceName
+    file_path: str
+    message: Optional[str] = None
+    status: str

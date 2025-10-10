@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, Integer, String, Boolean, Text, ForeignKey, DateTime, Date, LargeBinary, UUID
+from sqlalchemy import Column, Integer, String, Boolean, Text, ForeignKey, DateTime, Date, LargeBinary, UUID, func
 from sqlalchemy.orm import declarative_mixin, relationship
 from .database import Base
 from datetime import datetime
@@ -213,3 +213,17 @@ class LicenseFile(Base):
     file_type = Column(String, nullable=False)
     file_data = Column(LargeBinary, nullable=False)
     created_at = Column(DateTime)
+
+class ServiceExecution(Base):
+    __tablename__ = "service_executions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    file_id = Column(String, nullable=False)
+    service_id = Column(String, nullable=False)
+    execution_id = Column(String, nullable=False)
+    service_name = Column(String, nullable=False)
+    file_path = Column(String, nullable=False)
+    message = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now(), server_default=func.now())
+    status = Column(String, nullable=False)
