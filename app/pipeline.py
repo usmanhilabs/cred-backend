@@ -15,8 +15,21 @@ load_dotenv(dotenv_path=env_path)
 
 
 # ========== CONFIGURATION ==========
-os.environ["OPENAI_API_KEY"] =  os.getenv("OPENAI_API_KEY")
-client = OpenAI()
+# Defer client initialization until first use so the server can start without an API key.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client: OpenAI | None = None
+
+def _ensure_openai_client():
+    global client
+    if client is None:
+        api_key = os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is not set. Provide it in environment or .env to use the pipeline.")
+        os.environ["OPENAI_API_KEY"] = api_key
+        try:
+            client = OpenAI()
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
 
 # --------------------------
 # Helper: Convert PDF to first page image
@@ -63,6 +76,7 @@ def extract_json_block(llm_response: str) -> dict:
 # Step 1: OCR + Extract JSON via OpenAI Vision
 # --------------------------
 def extract_json_from_pdf(pdf_path, keys):
+    _ensure_openai_client()
     img = pdf_to_image(pdf_path)
     b64 = image_to_base64(img)
 
@@ -101,6 +115,7 @@ Only return JSON. No explanation.
 # Step 2: Compare PDFs Visually
 # --------------------------
 def compare_pdf_format_with_llm(reference_pdf_path, user_pdf_path, reference_json_keys):
+    _ensure_openai_client()
     img_ref = pdf_to_image(reference_pdf_path)
     b64_ref = image_to_base64(img_ref)
 

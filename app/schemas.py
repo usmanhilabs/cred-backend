@@ -59,6 +59,7 @@ class ServiceName(str, Enum):
     LICENCE = "License_Service"
     NPI = "NPI"
     BoardCertificate = "BoardCertificate"
+    Sanctions = "Sanctions"
 
 class ServiceExecutionRequest(BaseModel):
     file_id: str

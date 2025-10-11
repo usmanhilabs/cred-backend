@@ -24,6 +24,20 @@
 			"isBackground": false,
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Install Python deps",
+			"type": "shell",
+			"command": "pip3",
+			"args": [
+				"install",
+				"-r",
+				"requirements.txt"
+			],
+			"problemMatcher": [
+				"$eslint-stylish"
+			],
+			"group": "build"
 		}
 	]
 }

@@ -297,7 +297,7 @@ async def get_upload_info_psv(
                 "LicenseBoard_Extracted_Public_Record_Actions",
             ],
         },
-        "sanctions": {"verification": None, "ocr_keys": []},
+    "sanctions": {"verification": "Sanctions Verification", "ocr_keys": []},
         "npi": {"verification": "NPPES Verification", "ocr_keys": []},
     }
 

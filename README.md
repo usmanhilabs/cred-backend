@@ -11,10 +11,30 @@ git clone https://github.com/omkar-hilabs/fast-cred-backend.git
 cd fast-cred-backend
 ```
 
-### 2. Create env and install dependencies
+### 2. Create env and install dependencies (Python 3.11)
 
+PyMuPDF wheels are available for Python 3.11. Using other versions (e.g., 3.13) may force a slow source build. We pin Python in `.python-version`.
+
+Option A: pyenv + pyenv-virtualenv (recommended)
 ```bash
-python -m venv venv
+# Install Python 3.11 if needed
+pyenv install 3.11.9 -s
+
+# Create a project-local virtualenv
+pyenv virtualenv 3.11.9 cred-backend-311 || true
+pyenv local 3.11.9
+pyenv activate cred-backend-311
+
+# Upgrade pip tooling and install deps
+python -m pip install --upgrade pip wheel setuptools
+pip install -r requirements.txt
+```
+
+Option B: Built-in venv (if you have python3.11 on PATH)
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip wheel setuptools
 pip install -r requirements.txt
 ```
 

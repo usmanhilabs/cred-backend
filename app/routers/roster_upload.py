@@ -292,6 +292,7 @@ async def upload_to_s3(file: UploadFile = FastAPIFile(...)):
 
 from app.models import ServiceExecution
 from app.schemas import ServiceExecutionRequest, ServiceName
+from app.services.ingest_sanctions import ingest_sanctions_from_s3
 
 
 @router.post("/service/record")
@@ -333,6 +334,9 @@ def record_service_execution(request: ServiceExecutionRequest):
         elif request.service_name == ServiceName.BoardCertificate:
             logger.info("⚡ Triggering Board Certificate Service...")
             trigger_board_service(request)
+        elif request.service_name == ServiceName.Sanctions:
+            logger.info("⚡ Triggering Sanctions Service...")
+            trigger_sanctions_service(request)
 
         logger.info(f"🎯 Workflow continued for service={request.service_name.value}, record_id={new_record.id}")
         return {"message": "Record saved and next step triggered", "id": new_record.id}
@@ -359,6 +363,11 @@ def trigger_npi_service(req: ServiceExecutionRequest):
 def trigger_board_service(req: ServiceExecutionRequest):
     process_board_certification_from_s3(req.file_path)
     print(f"Triggering Credentialing Service for {req.file_id}")
+    
+def trigger_sanctions_service(req: ServiceExecutionRequest):
+    # Ingest sanctions CSV and provider reports from S3
+    ingest_sanctions_from_s3(req.file_path)
+    print(f"Sanctions Service completed for {req.file_id}")
 
 import boto3
 import tempfile
