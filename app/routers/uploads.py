@@ -1,6 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, Query
 from typing import Optional
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from ..models import UploadedDocument, FormData, Application, ApplicationEvent, SavedFile, BoardCertificate
 import base64
 from ..database import SessionLocal
@@ -136,10 +137,20 @@ async def get_upload_info(
     uploadIds: Optional[str] = Query(None),
     formId: Optional[str] = Query(None),
     appId: Optional[str] = Query(None),
+    npi: Optional[str] = Query(None),
 ):
     db: Session = SessionLocal()
     if appId:
         application = db.query(Application).filter(Application.id == appId).first()
+        if application:
+            formId = application.form_id
+    elif npi and not formId:
+        application = (
+            db.query(Application)
+            .filter(Application.npi == npi)
+            .order_by(Application.last_updt_dt.desc())
+            .first()
+        )
         if application:
             formId = application.form_id
 
@@ -244,11 +255,21 @@ async def get_upload_info_psv(
     uploadIds: Optional[str] = Query(None),
     formId: Optional[str] = Query(None),
     appId: Optional[str] = Query(None),
+    npi: Optional[str] = Query(None),
 ):
     db: Session = SessionLocal()
 
     if appId:
         application = db.query(Application).filter(Application.id == appId).first()
+        if application:
+            formId = application.form_id
+    elif npi and not formId:
+        application = (
+            db.query(Application)
+            .filter(Application.npi == npi)
+            .order_by(Application.last_updt_dt.desc())
+            .first()
+        )
         if application:
             formId = application.form_id
 
@@ -301,45 +322,91 @@ async def get_upload_info_psv(
         "npi": {"verification": "NPPES Verification", "ocr_keys": []},
     }
 
-    rows = (
+    # Load everything for the form and filter locally to avoid DB quirks around LIKE/LOWER and stray whitespace
+    wanted_types = [t.lower() for t in psv_types.keys()]
+    all_rows = (
         db.query(UploadedDocument)
-        .filter(UploadedDocument.form_id == formId)
-        .filter(UploadedDocument.file_type.in_(list(psv_types.keys())))
+        .filter(func.trim(UploadedDocument.form_id) == str(formId))
+        .order_by(UploadedDocument.id.desc())
         .all()
     )
+    rows = []
+    for r in all_rows:
+        ft = (r.file_type or "").strip().lower()
+        if ft in wanted_types or ("sanction" in ft):
+            rows.append(r)
 
     files = {}
     for r in rows:
+        # Normalize key to our expected mapping
+        r_type_lc = (r.file_type or "").lower()
+        r_type_norm = r_type_lc.strip()
+        # Map anything that contains 'sanction' to the canonical 'sanctions' key
+        if "sanction" in r_type_norm and "sanctions" in psv_types:
+            r_type = "sanctions"
+        else:
+            r_type = r_type_norm if r_type_norm in psv_types else (r.file_type or r_type_norm)
+        # Prefer the most recent document per type; skip if already populated
+        if r_type in files and files[r_type].get("fileId"):
+            continue
         ocr_data = _parse_json_field(r.ocr_output)
         json_match = _parse_json_field(r.json_match)
         verification_details = _parse_json_field(r.verification_data)
-        legacy_verif = psv_types[r.file_type]["verification"]
-        # For sanctions, surface key details in the ocrData section so the UI shows values
-        if r.file_type == "sanctions" and verification_details:
+        # Default verification label if missing
+        legacy_verif = psv_types.get(r_type, {}).get("verification") or ("Sanctions Verification" if r_type_lc == "sanctions" else None)
+        verification_label = legacy_verif
+        verification_status = None
+        # For sanctions, surface key details (without comments) in the ocrData section so the UI shows values
+        if (r_type == "sanctions" or "sanction" in r_type_lc) and verification_details:
             prov = verification_details.get("provider") or {}
             sanc = verification_details.get("sanction") or {}
-            ocr_data = {
+            synth = {
                 "Sanction Status": sanc.get("status") or "N/A",
                 "Sanction Details": sanc.get("details") or "N/A",
-                "Comment 1": sanc.get("comment_1") or "",
-                "Comment 2": sanc.get("comment_2") or "",
                 "NPI": verification_details.get("npi") or "",
                 "Provider Name": prov.get("name") or "",
             }
-        files[r.file_type] = {
+            # Merge synthetic sanctions summary with original OCR values rather than replacing them
+            try:
+                if isinstance(ocr_data, dict):
+                    # Merge and then strip verbose comments if they exist in OCR
+                    merged = {**ocr_data, **synth}
+                    for k in ("Comment 1", "Comment 2"):
+                        if k in merged:
+                            merged.pop(k, None)
+                    ocr_data = merged
+                else:
+                    ocr_data = synth
+            except Exception:
+                ocr_data = synth
+            # Also compute a simple verification label for UI display (red when sanctioned found)
+            status_val = (sanc.get("status") or "").strip().upper()
+            if status_val == "SANCTIONED":
+                verification_label = "Sanctioned Found"
+                verification_status = "found"
+            elif status_val in ("NOT SANCTIONED", "CLEAR", "NO MATCH"):
+                verification_label = "Sanction Not Found"
+                verification_status = "not_found"
+            else:
+                # Fallback to legacy label when unclear
+                verification_label = legacy_verif
+                verification_status = None
+        files[r_type] = {
             "filename": r.filename,
-            "fileType": r.file_type,
+            "fileType": r_type,
             "fileExtension": r.file_extension,
             "fileId": r.id,
             "status": r.status,
-            "progress": get_progress(r.file_type, r.status),
+            "progress": get_progress(r_type, r.status),
             "pdfMatch": _parse_json_field(r.pdf_match),
-            "ocrData": {k: ocr_data.get(k) for k in psv_types[r.file_type]["ocr_keys"]} if psv_types[r.file_type]["ocr_keys"] else ocr_data,
+            "ocrData": {k: ocr_data.get(k) for k in psv_types[r_type]["ocr_keys"]} if psv_types.get(r_type, {}).get("ocr_keys") else ocr_data,
             "jsonMatch": json_match,
             # Keep legacy string for UI label, and provide details in separate field
-            "verification": legacy_verif,
+            "verification": verification_label,
             "verificationDetails": verification_details,
         }
+        if verification_status is not None:
+            files[r_type]["verificationStatus"] = verification_status
 
     # Ensure placeholders for any missing PSV sections
     for ft, meta in psv_types.items():
